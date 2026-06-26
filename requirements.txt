@@ -1,0 +1,7 @@
+streamlit>=1.32
+numpy
+scipy
+matplotlib
+pandas
+librosa
+soundfile
