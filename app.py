@@ -14,7 +14,7 @@ DB_PATH = "fingerprint_db.pkl"
 SONGS_FOLDER = "songs"
 
 # ← PASTE YOUR GOOGLE DRIVE FOLDER ID HERE
-DRIVE_FOLDER_ID = "19O4AJaxrha98xj7UULts-TyXQPoTLFmS?usp=sharing"
+DRIVE_FOLDER_ID = "YOUR_FOLDER_ID_HERE"
 
 st.set_page_config(page_title="Audio Fingerprint Identifier", layout="wide")
 st.title("🎵 Audio Fingerprint Identifier")
