@@ -1,9 +1,7 @@
 
 import os
-import io
 import zipfile
 import tempfile
-import gdown
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,9 +10,7 @@ import fingerprint as fp
 
 DB_PATH = "fingerprint_db.pkl"
 SONGS_FOLDER = "songs"
-
-# ← PASTE YOUR GOOGLE DRIVE FOLDER ID HERE
-DRIVE_FOLDER_ID = "YOUR_FOLDER_ID_HERE"
+DRIVE_FOLDER_ID = "paste_your_folder_id_here"  # keep your real ID here
 
 st.set_page_config(page_title="Audio Fingerprint Identifier", layout="wide")
 st.title("🎵 Audio Fingerprint Identifier")
@@ -23,27 +19,43 @@ st.caption("Shazam-style song recognition — EE200 Q3B")
 
 @st.cache_resource
 def setup():
-    # Download songs from Google Drive if not already present
+    # Download songs from Google Drive if not present
     if not os.path.isdir(SONGS_FOLDER) or len(os.listdir(SONGS_FOLDER)) == 0:
         os.makedirs(SONGS_FOLDER, exist_ok=True)
-        with st.spinner("Downloading song library from Google Drive..."):
-            gdown.download_folder(
-                id=DRIVE_FOLDER_ID,
-                output=SONGS_FOLDER,
-                quiet=False,
-                use_cookies=False
-            )
+        try:
+            import gdown
+            with st.spinner("Downloading songs from Google Drive..."):
+                gdown.download_folder(
+                    id=DRIVE_FOLDER_ID,
+                    output=SONGS_FOLDER,
+                    quiet=False,
+                    use_cookies=False
+                )
+        except Exception as e:
+            st.error(f"Could not download songs: {e}")
+            return {}, []
 
-    # Load or build database
+    # Load database
     if os.path.exists(DB_PATH):
-        db, songs = fp.load_database(DB_PATH)
-    else:
-        with st.spinner("Indexing songs..."):
+        try:
+            db, songs = fp.load_database(DB_PATH)
+            return db, songs
+        except Exception as e:
+            st.error(f"Could not load database: {e}")
+            return {}, []
+
+    # Build database if pkl missing
+    try:
+        with st.spinner("Building database..."):
             db, songs = fp.build_database(SONGS_FOLDER, DB_PATH)
-    return db, songs
+        return db, songs
+    except Exception as e:
+        st.error(f"Could not build database: {e}")
+        return {}, []
 
 
-db, songs = setup()
+result = setup()
+db, songs = result if result else ({}, [])
 
 with st.sidebar:
     st.header("Database")
@@ -56,8 +68,8 @@ with st.sidebar:
 mode = st.tabs(["🎧 Single-clip mode", "📦 Batch mode"])
 
 
-def plot_spectrogram(result):
-    f, t, Sxx_db = result["f"], result["t"], result["Sxx_db"]
+def plot_spectrogram(res):
+    f, t, Sxx_db = res["f"], res["t"], res["Sxx_db"]
     fig, ax = plt.subplots(figsize=(8, 4))
     im = ax.pcolormesh(t, f, Sxx_db, shading="gouraud", cmap="magma")
     ax.set_xlabel("Time (s)"); ax.set_ylabel("Frequency (Hz)")
@@ -65,9 +77,9 @@ def plot_spectrogram(result):
     return fig
 
 
-def plot_constellation(result):
-    f, t = result["f"], result["t"]
-    fi, ti = result["freq_idx"], result["time_idx"]
+def plot_constellation(res):
+    f, t = res["f"], res["t"]
+    fi, ti = res["freq_idx"], res["time_idx"]
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.set_facecolor("black")
     ax.scatter(t[ti], f[fi], s=8, c="cyan")
@@ -76,7 +88,7 @@ def plot_constellation(result):
     return fig
 
 
-def plot_offset_histogram(offsets, best_song):
+def plot_histogram(offsets, best_song):
     fig, ax = plt.subplots(figsize=(8, 3))
     if best_song and best_song in offsets:
         hist = offsets[best_song]
@@ -92,24 +104,30 @@ with mode[0]:
         st.warning("No songs indexed yet.")
     else:
         uploaded = st.file_uploader("Upload a query clip",
-                                     type=["wav","mp3","flac","ogg"], key="single")
+                                     type=["wav","mp3","flac","ogg"],
+                                     key="single")
         if uploaded:
-            with tempfile.NamedTemporaryFile(delete=False,
-                    suffix=os.path.splitext(uploaded.name)[1]) as tmp:
-                tmp.write(uploaded.read()); tmp_path = tmp.name
+            suffix = os.path.splitext(uploaded.name)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(uploaded.read())
+                tmp_path = tmp.name
             st.audio(uploaded)
-            with st.spinner("Matching..."):
-                y = fp.load_audio(tmp_path)
-                best_song, best_score, offsets, result = fp.match_query(y, db)
-            if best_song and best_score >= 3:
-                st.success(f"✅ Matched: **{best_song}** (score = {best_score})")
-            else:
-                st.error(f"❌ No confident match (best score = {best_score})")
-            col1, col2 = st.columns(2)
-            with col1: st.pyplot(plot_spectrogram(result))
-            with col2: st.pyplot(plot_constellation(result))
-            st.pyplot(plot_offset_histogram(offsets, best_song))
-            os.remove(tmp_path)
+            try:
+                with st.spinner("Matching..."):
+                    y = fp.load_audio(tmp_path)
+                    best_song, best_score, offsets, res = fp.match_query(y, db)
+                if best_song and best_score >= 3:
+                    st.success(f"✅ Matched: **{best_song}** (score = {best_score})")
+                else:
+                    st.error(f"❌ No confident match (best score = {best_score})")
+                col1, col2 = st.columns(2)
+                with col1: st.pyplot(plot_spectrogram(res))
+                with col2: st.pyplot(plot_constellation(res))
+                st.pyplot(plot_histogram(offsets, best_song))
+            except Exception as e:
+                st.error(f"Error during matching: {e}")
+            finally:
+                os.remove(tmp_path)
 
 
 with mode[1]:
@@ -119,7 +137,8 @@ with mode[1]:
     else:
         batch_files = st.file_uploader("Upload clips or a .zip",
                                         type=["wav","mp3","flac","ogg","zip"],
-                                        accept_multiple_files=True, key="batch")
+                                        accept_multiple_files=True,
+                                        key="batch")
         if batch_files and st.button("Run batch identification"):
             rows = []
             tmp_dir = tempfile.mkdtemp()
@@ -127,15 +146,15 @@ with mode[1]:
             for f_ in batch_files:
                 if f_.name.lower().endswith(".zip"):
                     zpath = os.path.join(tmp_dir, f_.name)
-                    with open(zpath,"wb") as out: out.write(f_.read())
+                    with open(zpath, "wb") as out: out.write(f_.read())
                     with zipfile.ZipFile(zpath) as zf: zf.extractall(tmp_dir)
-                    for root,_,files in os.walk(tmp_dir):
+                    for root, _, files in os.walk(tmp_dir):
                         for fn in files:
                             if fn.lower().endswith((".wav",".mp3",".flac",".ogg")):
-                                clip_paths.append(os.path.join(root,fn))
+                                clip_paths.append(os.path.join(root, fn))
                 else:
                     p = os.path.join(tmp_dir, f_.name)
-                    with open(p,"wb") as out: out.write(f_.read())
+                    with open(p, "wb") as out: out.write(f_.read())
                     clip_paths.append(p)
             progress = st.progress(0.0)
             for i, path in enumerate(clip_paths):
@@ -147,8 +166,8 @@ with mode[1]:
                 except:
                     prediction = ""
                 rows.append({"filename": fname, "prediction": prediction})
-                progress.progress((i+1)/len(clip_paths))
-            df = pd.DataFrame(rows, columns=["filename","prediction"])
+                progress.progress((i + 1) / len(clip_paths))
+            df = pd.DataFrame(rows, columns=["filename", "prediction"])
             st.dataframe(df)
             st.download_button("⬇️ Download results.csv",
                                 df.to_csv(index=False).encode(),
