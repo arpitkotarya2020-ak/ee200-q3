@@ -2,15 +2,15 @@
 import os
 import zipfile
 import tempfile
-import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import streamlit as st
 import fingerprint as fp
 
 DB_PATH = "fingerprint_db.pkl"
 SONGS_FOLDER = "songs"
-DRIVE_FOLDER_ID = "paste_your_folder_id_here"  # keep your real ID here
 
 st.set_page_config(page_title="Audio Fingerprint Identifier", layout="wide")
 st.title("🎵 Audio Fingerprint Identifier")
@@ -19,43 +19,22 @@ st.caption("Shazam-style song recognition — EE200 Q3B")
 
 @st.cache_resource
 def setup():
-    # Download songs from Google Drive if not present
-    if not os.path.isdir(SONGS_FOLDER) or len(os.listdir(SONGS_FOLDER)) == 0:
-        os.makedirs(SONGS_FOLDER, exist_ok=True)
-        try:
-            import gdown
-            with st.spinner("Downloading songs from Google Drive..."):
-                gdown.download_folder(
-                    id=DRIVE_FOLDER_ID,
-                    output=SONGS_FOLDER,
-                    quiet=False,
-                    use_cookies=False
-                )
-        except Exception as e:
-            st.error(f"Could not download songs: {e}")
-            return {}, []
-
-    # Load database
-    if os.path.exists(DB_PATH):
-        try:
+    try:
+        if os.path.exists(DB_PATH):
             db, songs = fp.load_database(DB_PATH)
             return db, songs
-        except Exception as e:
-            st.error(f"Could not load database: {e}")
+        elif os.path.isdir(SONGS_FOLDER):
+            with st.spinner("Building database from songs folder..."):
+                db, songs = fp.build_database(SONGS_FOLDER, DB_PATH)
+            return db, songs
+        else:
             return {}, []
-
-    # Build database if pkl missing
-    try:
-        with st.spinner("Building database..."):
-            db, songs = fp.build_database(SONGS_FOLDER, DB_PATH)
-        return db, songs
     except Exception as e:
-        st.error(f"Could not build database: {e}")
+        st.error(f"Setup error: {e}")
         return {}, []
 
 
-result = setup()
-db, songs = result if result else ({}, [])
+db, songs = setup()
 
 with st.sidebar:
     st.header("Database")
@@ -69,22 +48,23 @@ mode = st.tabs(["🎧 Single-clip mode", "📦 Batch mode"])
 
 
 def plot_spectrogram(res):
-    f, t, Sxx_db = res["f"], res["t"], res["Sxx_db"]
     fig, ax = plt.subplots(figsize=(8, 4))
-    im = ax.pcolormesh(t, f, Sxx_db, shading="gouraud", cmap="magma")
+    im = ax.pcolormesh(res["t"], res["f"], res["Sxx_db"],
+                       shading="gouraud", cmap="magma")
     ax.set_xlabel("Time (s)"); ax.set_ylabel("Frequency (Hz)")
     ax.set_title("Spectrogram"); fig.colorbar(im, ax=ax, label="dB")
+    plt.tight_layout()
     return fig
 
 
 def plot_constellation(res):
-    f, t = res["f"], res["t"]
-    fi, ti = res["freq_idx"], res["time_idx"]
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.set_facecolor("black")
-    ax.scatter(t[ti], f[fi], s=8, c="cyan")
+    ax.scatter(res["t"][res["time_idx"]], res["f"][res["freq_idx"]],
+               s=8, c="cyan")
     ax.set_xlabel("Time (s)"); ax.set_ylabel("Frequency (Hz)")
-    ax.set_title(f"Constellation ({len(fi)} peaks)")
+    ax.set_title(f"Constellation ({len(res['freq_idx'])} peaks)")
+    plt.tight_layout()
     return fig
 
 
@@ -95,6 +75,7 @@ def plot_histogram(offsets, best_song):
         ax.bar(list(hist.keys()), list(hist.values()), color="tomato")
         ax.set_title(f"Offset histogram — {best_song}")
     ax.set_xlabel("Offset (frames)"); ax.set_ylabel("Hash count")
+    plt.tight_layout()
     return fig
 
 
@@ -125,9 +106,10 @@ with mode[0]:
                 with col2: st.pyplot(plot_constellation(res))
                 st.pyplot(plot_histogram(offsets, best_song))
             except Exception as e:
-                st.error(f"Error during matching: {e}")
+                st.error(f"Matching error: {e}")
             finally:
-                os.remove(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
 
 
 with mode[1]:
